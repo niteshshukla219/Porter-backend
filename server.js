@@ -193,7 +193,17 @@ app.get('/api/bookings/:id/status', async (req, res) => {
         res.status(500).json({ error: 'डेटाबेस एरर' });
     }
 });
-
+// कस्टमर ऑर्डर्स हिस्ट्री API
+app.get('/api/bookings/history', async (req, res) => {
+    try {
+        const query = 'SELECT * FROM bookings ORDER BY id DESC';
+        const result = await pool.query(query);
+        res.json(result.rows);
+    } catch (error) {
+        console.error('History Fetch Error:', error);
+        res.status(500).json({ error: 'डेटाबेस एरर' });
+    }
+});
 // ==========================================
 // 3. ड्राइवर पार्टनर रूट्स (DRIVER)
 // ==========================================
