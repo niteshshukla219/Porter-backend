@@ -196,7 +196,7 @@ app.get('/api/bookings/:id/status', async (req, res) => {
 // कस्टमर ऑर्डर्स हिस्ट्री API
 app.get('/api/bookings/history', async (req, res) => {
     try {
-        const query = 'SELECT * FROM bookings ORDER BY id DESC';
+        const query = 'SELECT * FROM bookings ORDER BY created_at DESC';
         const result = await pool.query(query);
         res.json(result.rows);
     } catch (error) {
@@ -347,7 +347,95 @@ app.put('/api/admin/bookings/:id/status', async (req, res) => {
         res.status(500).json({ error: 'डेटाबेस एरर' });
     }
 });
+// ==========================================
+// 🚀 KYC मैनेजमेंट रूट्स (DRIVER & ADMIN)
+// ==========================================
 
+// 1. ड्राइवर द्वारा KYC दस्तावेज़ सबमिट करना
+app.post('/api/driver/kyc/submit', async (req, res) => {
+    try {
+        const { phone, selfie_url, aadhaar_url, dl_url, rc_url } = req.body;
+
+        if (!phone) return res.status(400).json({ error: 'फ़ोन नंबर आवश्यक है' });
+
+        const query = `
+            UPDATE users 
+            SET kyc_status = 'under_review',
+                selfie_url = COALESCE($1, selfie_url),
+                aadhaar_url = COALESCE($2, aadhaar_url),
+                dl_url = COALESCE($3, dl_url),
+                rc_url = COALESCE($4, rc_url)
+            WHERE phone = $5 AND role = 'driver'
+            RETURNING id, phone, kyc_status;
+        `;
+        
+        const values = [selfie_url, aadhaar_url, dl_url, rc_url, phone];
+        const result = await pool.query(query, values);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'ड्राइवर नहीं मिला' });
+        }
+
+        res.json({ message: 'KYC दस्तावेज़ सफलतापूर्वक सबमिट किए गए! कृपया एडमिन अप्रूवल का इंतज़ार करें।', user: result.rows[0] });
+    } catch (error) {
+        console.error('KYC Submit Error:', error);
+        res.status(500).json({ error: 'सर्वर एरर' });
+    }
+});
+
+// 2. एडमिन द्वारा KYC अप्रूव या रिजेक्ट करना
+app.put('/api/admin/kyc/:phone/status', async (req, res) => {
+    try {
+        const driverPhone = req.params.phone;
+        const { status, admin_note } = req.body; 
+
+        if (!['approved', 'rejected', 'pending', 'under_review'].includes(status)) {
+            return res.status(400).json({ error: 'गलत KYC स्टेटस' });
+        }
+
+        const query = `
+            UPDATE users 
+            SET kyc_status = $1
+            WHERE phone = $2 AND role = 'driver'
+            RETURNING id, phone, kyc_status, name;
+        `;
+        
+        const result = await pool.query(query, [status, driverPhone]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'ड्राइवर नहीं मिला' });
+        }
+
+        // सॉकेट से ड्राइवर को तुरंत नोटिफिकेशन भेजें
+        io.emit(`kyc_status_updated_${driverPhone}`, { 
+            status: status, 
+            message: admin_note || (status === 'approved' ? 'आपका KYC पास हो गया है!' : 'आपका KYC रद्द कर दिया गया है।') 
+        });
+
+        res.json({ message: `KYC स्टेटस ${status} कर दिया गया है।`, driver: result.rows[0] });
+    } catch (error) {
+        console.error('Admin KYC Update Error:', error);
+        res.status(500).json({ error: 'सर्वर एरर' });
+    }
+});
+
+// 3. ड्राइवर का वर्तमान KYC स्टेटस चेक करना
+app.get('/api/driver/kyc/status/:phone', async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        const query = `SELECT id, name, kyc_status FROM users WHERE phone = $1 AND role = 'driver';`;
+        const result = await pool.query(query, [phone]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'ड्राइवर नहीं मिला' });
+        }
+
+        res.json({ kyc_status: result.rows[0].kyc_status || 'pending' });
+    } catch (error) {
+        console.error('Check KYC Error:', error);
+        res.status(500).json({ error: 'सर्वर एरर' });
+    }
+});
 // ==========================================
 // सर्वर स्टार्ट
 // ==========================================
