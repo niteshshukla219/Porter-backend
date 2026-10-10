@@ -5,6 +5,24 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/');
+  },
+  filename: function (req, file, cb) {
+    cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage: storage });
 
 const app = express();
 const server = http.createServer(app);
@@ -18,6 +36,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'porter_super_secret_key_123';
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -363,35 +382,55 @@ app.put('/api/admin/bookings/:id/status', async (req, res) => {
 // ==========================================
 
 // 1. ड्राइवर द्वारा KYC दस्तावेज़ सबमिट करना
-app.post('/api/driver/kyc/submit', async (req, res) => {
-    try {
-        const { phone, selfie_url, aadhaar_url, dl_url, rc_url } = req.body;
+app.post('/api/driver/kyc/submit', upload.fields([
+  { name: 'selfie', maxCount: 1 },
+  { name: 'aadhaar', maxCount: 1 },
+  { name: 'dl', maxCount: 1 },
+  { name: 'rc', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const files = req.files;
 
-        if (!phone) return res.status(400).json({ error: 'फ़ोन नंबर आवश्यक है' });
+    if (!phone) return res.status(400).json({ error: 'फ़ोन नंबर आवश्यक है' });
 
-        const query = `
-            UPDATE users 
-            SET kyc_status = 'under_review',
-                selfie_url = COALESCE($1, selfie_url),
-                aadhaar_url = COALESCE($2, aadhaar_url),
-                dl_url = COALESCE($3, dl_url),
-                rc_url = COALESCE($4, rc_url)
-            WHERE phone = $5 AND role = 'driver'
-            RETURNING id, phone, kyc_status;
-        `;
-        
-        const values = [selfie_url, aadhaar_url, dl_url, rc_url, phone];
-        const result = await pool.query(query, values);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'ड्राइवर नहीं मिला' });
-        }
-
-        res.json({ message: 'KYC दस्तावेज़ सफलतापूर्वक सबमिट किए गए! कृपया एडमिन अप्रूवल का इंतज़ार करें।', user: result.rows[0] });
-    } catch (error) {
-        console.error('KYC Submit Error:', error);
-        res.status(500).json({ error: 'सर्वर एरर' });
+    // अगर कोई फोटो नहीं आई है
+    if (!files || !files['selfie'] || !files['aadhaar'] || !files['dl'] || !files['rc']) {
+      return res.status(400).json({ error: 'सभी 4 दस्तावेज़ अपलोड करना आवश्यक है!' });
     }
+
+    // सर्वर का असली एड्रेस (ताकि फोटो का फुल लिंक बन सके)
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+    const selfie_url = `${baseUrl}/uploads/${files['selfie'][0].filename}`;
+    const aadhaar_url = `${baseUrl}/uploads/${files['aadhaar'][0].filename}`;
+    const dl_url = `${baseUrl}/uploads/${files['dl'][0].filename}`;
+    const rc_url = `${baseUrl}/uploads/${files['rc'][0].filename}`;
+
+    const query = `
+      UPDATE users 
+      SET kyc_status = 'under_review',
+          selfie_url = COALESCE($1, selfie_url),
+          aadhaar_url = COALESCE($2, aadhaar_url),
+          dl_url = COALESCE($3, dl_url),
+          rc_url = COALESCE($4, rc_url)
+      WHERE phone = $5 AND role = 'driver'
+      RETURNING id, phone, kyc_status;
+    `;
+    
+    const values = [selfie_url, aadhaar_url, dl_url, rc_url, phone];
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'ड्राइवर नहीं मिला' });
+    }
+
+    res.json({ message: 'KYC दस्तावेज़ सफलतापूर्वक सबमिट किए गए! कृपया एडमिन अप्रूवल का इंतज़ार करें!', user: result.rows[0] });
+
+  } catch (error) {
+    console.error('KYC Upload Error:', error);
+    res.status(500).json({ error: 'सर्वर में फोटो सेव करते समय एरर' });
+  }
 });
 
 // 2. एडमिन द्वारा KYC अप्रूव या रिजेक्ट करना
