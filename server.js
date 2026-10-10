@@ -325,6 +325,17 @@ app.get('/api/admin/bookings', async (req, res) => {
         res.status(500).json({ error: 'डेटाबेस एरर' });
     }
 });
+// एडमिन पैनल के लिए सभी ड्राइवरों का डेटा भेजने वाली API
+app.get('/api/admin/drivers', async (req, res) => {
+    try {
+        const query = "SELECT * FROM users WHERE role = 'driver' ORDER BY created_at DESC";
+        const result = await pool.query(query);
+        res.status(200).json(result.rows);
+    } catch (err) {
+        console.error('ड्राइवर डेटा लाने में एरर:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
 
 // एडमिन द्वारा सीधे स्टेटस बदलना
 app.put('/api/admin/bookings/:id/status', async (req, res) => {
