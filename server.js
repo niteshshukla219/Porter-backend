@@ -8,7 +8,11 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
+const supabaseUrl = process.env.SUPABASE_URL || 'https://hppyxfrdjqzgcvsshbvq.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY || 'sb_publishable_mUarBvdUMtt96kPoTnRoIA_rHYTx7KD';
+const supabase = createClient(supabaseUrl, supabaseKey);
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
