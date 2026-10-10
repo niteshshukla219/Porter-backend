@@ -386,47 +386,99 @@ app.post('/api/driver/kyc/submit', upload.fields([
   { name: 'selfie', maxCount: 1 },
   { name: 'aadhaar', maxCount: 1 },
   { name: 'dl', maxCount: 1 },
-  { name: 'rc', maxCount: 1 }
+  { name: 'rc', maxCount: 1 },
+  { name: 'insurance', maxCount: 1 },
+  { name: 'pan', maxCount: 1 }
 ]), async (req, res) => {
   try {
-    const { phone } = req.body;
-    const files = req.files;
-
-    if (!phone) return res.status(400).json({ error: 'फ़ोन नंबर आवश्यक है' });
-
-    // अगर कोई फोटो नहीं आई है
-    if (!files || !files['selfie'] || !files['aadhaar'] || !files['dl'] || !files['rc']) {
-      return res.status(400).json({ error: 'सभी 4 दस्तावेज़ अपलोड करना आवश्यक है!' });
+   const { 
+      phone, 
+      full_name, 
+      address, 
+      emergency_contact, 
+      vehicle_type, 
+      vehicle_number,
+      bank_account_number,
+      bank_ifsc_code,
+      bank_name,
+      pan_number 
+    } = req.body;
+    
+    if (!phone) {
+      return res.status(400).json({ error: 'फ़ोन नंबर आवश्यक है' });
     }
 
-    // सर्वर का असली एड्रेस (ताकि फोटो का फुल लिंक बन सके)
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const files = req.files || {};
+    
+    // Supabase पर फोटो अपलोड करने का फंक्शन
+    const uploadToSupabase = async (fileArray, folderPath) => {
+       if (!fileArray || fileArray.length === 0) return null;
+       const file = fileArray[0];
+       const fileName = `${Date.now()}_${file.originalname}`;
+       const { data, error } = await supabase.storage
+         .from('kyc-documents')
+         .upload(`${folderPath}/${fileName}`, file.buffer, {
+           contentType: file.mimetype,
+           upsert: false
+         });
+       
+       if (error) {
+         console.error(`Error uploading to ${folderPath}:`, error);
+         return null;
+       }
+       
+       const { data: publicUrlData } = supabase.storage
+         .from('kyc-documents')
+         .getPublicUrl(`${folderPath}/${fileName}`);
+         
+       return publicUrlData.publicUrl;
+    };
 
-    const selfie_url = `${baseUrl}/uploads/${files['selfie'][0].filename}`;
-    const aadhaar_url = `${baseUrl}/uploads/${files['aadhaar'][0].filename}`;
-    const dl_url = `${baseUrl}/uploads/${files['dl'][0].filename}`;
-    const rc_url = `${baseUrl}/uploads/${files['rc'][0].filename}`;
+    // 6 फोटो अपलोड करना
+    const selfieUrl = await uploadToSupabase(files['selfie'], 'selfies');
+    const aadhaarUrl = await uploadToSupabase(files['aadhaar'], 'aadhaar');
+    const dlUrl = await uploadToSupabase(files['dl'], 'dl');
+    const rcUrl = await uploadToSupabase(files['rc'], 'rc');
+    const insuranceUrl = await uploadToSupabase(files['insurance'], 'insurance'); 
+    const panUrl = await uploadToSupabase(files['pan'], 'pan'); 
 
+    // डेटाबेस में अपडेट करना (SQL Query से)
     const query = `
       UPDATE users 
       SET kyc_status = 'under_review',
           selfie_url = COALESCE($1, selfie_url),
           aadhaar_url = COALESCE($2, aadhaar_url),
           dl_url = COALESCE($3, dl_url),
-          rc_url = COALESCE($4, rc_url)
-      WHERE phone = $5 AND role = 'driver'
+          rc_url = COALESCE($4, rc_url),
+          insurance_url = COALESCE($5, insurance_url),
+          pan_url = COALESCE($6, pan_url),
+          full_name = COALESCE($7, full_name),
+          address = COALESCE($8, address),
+          emergency_contact = COALESCE($9, emergency_contact),
+          vehicle_type = COALESCE($10, vehicle_type),
+          vehicle_number = COALESCE($11, vehicle_number),
+          bank_account_number = COALESCE($12, bank_account_number),
+          bank_ifsc_code = COALESCE($13, bank_ifsc_code),
+          bank_name = COALESCE($14, bank_name),
+          pan_number = COALESCE($15, pan_number)
+      WHERE phone = $16 AND role = 'driver'
       RETURNING id, phone, kyc_status;
     `;
-    
-    const values = [selfie_url, aadhaar_url, dl_url, rc_url, phone];
+
+    const values = [
+      selfieUrl, aadhaarUrl, dlUrl, rcUrl, insuranceUrl, panUrl,
+      full_name, address, emergency_contact, vehicle_type, vehicle_number,
+      bank_account_number, bank_ifsc_code, bank_name, pan_number, 
+      phone
+    ];
+
     const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'ड्राइवर नहीं मिला' });
     }
 
-    res.json({ message: 'KYC दस्तावेज़ सफलतापूर्वक सबमिट किए गए! कृपया एडमिन अप्रूवल का इंतज़ार करें!', user: result.rows[0] });
-
+    res.json({ message: 'KYC दस्तावेज़ सफलतापूर्वक सबमिट किए गए! कृपया एडमिन अप्रूवल का इंतज़ार करें!', user: result.rows[0] });
   } catch (error) {
     console.error('KYC Upload Error:', error);
     res.status(500).json({ error: 'सर्वर में फोटो सेव करते समय एरर' });
